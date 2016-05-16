@@ -56,7 +56,7 @@ typedef struct
 typedef struct
 {
 	 gchar		*name;
-	 alpm_list_t	*servers, *siglevels;
+	 alpm_list_t	*servers, *siglevels, *usage;
 } PkAlpmConfigSection;
 
 static PkAlpmConfig *
@@ -82,6 +82,7 @@ pk_alpm_config_section_free (gpointer data)
 	alpm_list_free_inner (section->servers, g_free);
 	alpm_list_free (section->servers);
 	FREELIST (section->siglevels);
+	FREELIST (section->usage);
 	g_free (section);
 }
 
@@ -453,8 +454,8 @@ pk_alpm_config_enter_section (PkAlpmConfig *config, const gchar *name)
 
 static gboolean
 pk_alpm_config_add_server (PkAlpmConfig *config,
-			      PkAlpmConfigSection *section,
-			      const gchar *address, GError **e)
+						   PkAlpmConfigSection *section,
+						   const gchar *address, GError **e)
 {
 	g_autofree gchar *url = NULL;
 
@@ -495,9 +496,21 @@ pk_alpm_config_add_siglevel (PkAlpmConfig *config,
 	section->siglevels = pk_alpm_list_add_words (section->siglevels, words);
 }
 
+static void
+pk_alpm_config_add_usage (PkAlpmConfig *config,
+						  PkAlpmConfigSection *section,
+						  const gchar *words)
+{
+	g_return_if_fail (config != NULL);
+	g_return_if_fail (section != NULL);
+	g_return_if_fail (words != NULL);
+
+	section->usage = pk_alpm_list_add_words (section->usage, words);
+}
+
 static gboolean
 pk_alpm_config_parse (PkAlpmConfig *config, const gchar *filename,
-			 PkAlpmConfigSection *section, GError **error)
+					  PkAlpmConfigSection *section, GError **error)
 {
 	g_autoptr(GFile) file = NULL;
 	g_autoptr(GFileInputStream) is = NULL;
@@ -611,8 +624,8 @@ pk_alpm_config_parse (PkAlpmConfig *config, const gchar *filename,
 			continue;
 		}
 
-		if (g_strcmp0 (key, "Usage") == 0) {
-			/* Ignore the "Usage" key, alpm will handle it. */
+		if (g_strcmp0 (key, "Usage") == 0 && str != NULL) {
+			pk_alpm_config_add_usage (config, section, str);
 			continue;
 		}
 
@@ -627,7 +640,7 @@ pk_alpm_config_parse (PkAlpmConfig *config, const gchar *filename,
 		return FALSE;
 	} else
 		return TRUE;
-}
+	}
 
 static alpm_handle_t *
 pk_alpm_config_initialize_alpm (PkAlpmConfig *config, GError **error)
@@ -788,6 +801,39 @@ pk_alpm_siglevel_cross (alpm_siglevel_t base, alpm_siglevel_t level, alpm_siglev
 	return mask ? (level & mask) | (base & ~mask) : level;
 }
 
+static int
+pk_alpm_usage_parse (alpm_list_t *values, alpm_db_usage_t *usage, GError **error)
+{
+	alpm_list_t *i;
+	alpm_db_usage_t level = *usage;
+	int ret = 0;
+
+	for(i = values; i; i = i->next) {
+		char *key = i->data;
+
+		if(strcmp(key, "Sync") == 0) {
+			level |= ALPM_DB_USAGE_SYNC;
+		} else if(strcmp(key, "Search") == 0) {
+			level |= ALPM_DB_USAGE_SEARCH;
+		} else if(strcmp(key, "Install") == 0) {
+			level |= ALPM_DB_USAGE_INSTALL;
+		} else if(strcmp(key, "Upgrade") == 0) {
+			level |= ALPM_DB_USAGE_UPGRADE;
+		} else if(strcmp(key, "All") == 0) {
+			level |= ALPM_DB_USAGE_ALL;
+		} else {
+			g_set_error (error, PK_ALPM_ERROR, PK_ALPM_ERR_CONFIG_INVALID,
+						 "invalid Usage value: %s", key);
+			ret = 0;
+		}
+	}
+
+	*usage = level;
+
+	return ret;
+}
+
+
 static gboolean
 pk_alpm_config_configure_repos (PkBackend *backend, PkAlpmConfig *config,
 				   alpm_handle_t *handle, GError **error)
@@ -822,15 +868,20 @@ pk_alpm_config_configure_repos (PkBackend *backend, PkAlpmConfig *config,
 	while ((i = i->next) != NULL) {
 		PkAlpmConfigSection *repo = i->data;
 		alpm_siglevel_t repo_level;
+		alpm_db_usage_t usage;
 
 		if (pk_alpm_siglevel_parse (repo->siglevels, &level, &mask, error) > 0)
 			return FALSE;
+
+		if (pk_alpm_usage_parse (repo->usage, &usage, error) > 0) {
+			return FALSE;
+		}
 
 		repo_level = pk_alpm_siglevel_cross (base, level, mask);
 		if (repo_level == ALPM_SIG_USE_DEFAULT)
 			 return FALSE;
 
-		pk_alpm_add_database (backend, repo->name, repo->servers, repo_level);
+		pk_alpm_add_database (backend, repo->name, repo->servers, repo_level, usage);
 	}
 
 	return TRUE;

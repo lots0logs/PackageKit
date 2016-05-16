@@ -31,6 +31,7 @@ typedef struct
 	gchar *name;
 	alpm_list_t *servers;
 	alpm_siglevel_t level;
+	alpm_db_usage_t usage;
 } PkBackendRepo;
 
 static gboolean
@@ -49,6 +50,7 @@ pk_alpm_disabled_repos_configure (PkBackend *backend, gboolean only_trusted, GEr
 	for (i = priv->configured_repos; i != NULL; i = i->next) {
 		PkBackendRepo *repo = (PkBackendRepo *) i->data;
 		alpm_siglevel_t level = repo->level;
+		alpm_db_usage_t usage = repo->usage;
 		alpm_db_t *db;
 
 		if (!only_trusted) {
@@ -65,6 +67,7 @@ pk_alpm_disabled_repos_configure (PkBackend *backend, gboolean only_trusted, GEr
 			return FALSE;
 		}
 
+		alpm_db_set_usage (db, usage == 0 ? ALPM_DB_USAGE_ALL : usage);
 		alpm_db_set_servers (db, alpm_list_strdup (repo->servers));
 	}
 
@@ -72,8 +75,11 @@ pk_alpm_disabled_repos_configure (PkBackend *backend, gboolean only_trusted, GEr
 }
 
 void
-pk_alpm_add_database (PkBackend *backend, const gchar *name, alpm_list_t *servers,
-			 alpm_siglevel_t level)
+pk_alpm_add_database (PkBackend *backend,
+					  const gchar *name,
+					  alpm_list_t *servers,
+					  alpm_siglevel_t level,
+					  alpm_db_usage_t usage)
 {
 	PkBackendAlpmPrivate *priv = pk_backend_get_user_data (backend);
 	PkBackendRepo *repo = g_new (PkBackendRepo, 1);
@@ -83,6 +89,7 @@ pk_alpm_add_database (PkBackend *backend, const gchar *name, alpm_list_t *server
 	repo->name = g_strdup (name);
 	repo->servers = alpm_list_strdup (servers);
 	repo->level = level;
+	repo->usage = usage;
 
 	priv->configured_repos = alpm_list_add (priv->configured_repos, repo);
 }
